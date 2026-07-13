@@ -1,0 +1,27 @@
+# Data files (too large)
+dataset/
+*.zip
+*.tar
+*.tar.gz
+*.mp4
+*.wav
+*.png
+*.jpg
+*.parquet
+*.jsonl
+
+# Cache
+__pycache__/
+.cache/
+*.pyc
+
+# Logs
+*.log
+/tmp/
+
+# Excel backup
+~$*.xlsx
+
+# System
+.DS_Store
+Thumbs.db
