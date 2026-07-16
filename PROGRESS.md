@@ -1,149 +1,110 @@
-# 数据进展追踪 — 全数据集状态
+# 项目进展全记录
 
-> 最后更新：2026-07-12 23:15
-> 目标：面向 Wan2.2 以人为中心的视频生成训练
-
----
-
-## 一、概览
-
-| 维度 | 状态 |
-|------|------|
-| Excel 编目数据集 | 90 个 |
-| 调研新增 | 12 个（OpenHumanVid, EgoVid-5M 等） |
-| 已下载 | **14 个**（有实际数据） |
-| Wan2.2 就绪 | 12,999 视频（Charades 9,848 + RAVDESS 2,880 + EasyCom 271） |
-| 不适合/已排除 | 21 个 |
-| 待申请/下载中 | 10+ 个 |
-| 总数据量 | ~11TB |
-| 存储路径 | `/apdcephfs_gy2/share_302533218/cedricnie/wm_dataset/dataset/` |
+> 最后更新：2026-07-16
 
 ---
 
-## 二、90 数据集完整状态
+## 一、Wan2.2 训练数据总览
 
-### ✅ 已下载（14 个）
+### 已转换 (720p/24fps MP4)
 
-| 数据集 | 大小 | 格式 | 视频数 | 用途 | Wan2.2 |
-|--------|------|------|--------|------|--------|
-| **MIRA Rocket Science** | ~2.6TB | 328 tar, ~162K MP4 | ~162K | 游戏多视角 | 待处理 |
-| **OpenVid-1M (OpenVidHD)** | 2.0TB | 14 zips, ~300K MP4 | ~300K+ | 通用高清视频 | 待处理 |
-| **Charades** | 31GB | 9,848 MP4 | 9,848 | 日常活动 | 就绪 720p |
-| **RAVDESS** | 26GB | 2,880 MP4 | 2,880 | 情感表达 | 就绪 720p |
-| **EasyCom** | 66GB | 323 MP4 | 323 | AR 对话 | 就绪 720p |
-| **H2O** | 177GB | 183K 图片(tar.gz) | ~183K img | 双手操作 | 图片→视频 |
-| **DexYCB** | 71GB | 348K 图片 | 348K img | 手物抓取 | 图片→视频 |
-| **EPIC-KITCHENS-100** | 8.6GB | 28 MP4 | 28 | 厨房 HOI | 场景单一 |
-| **CREMA-D** | 7GB | 7,442 WAV | 0 | 情感音频 | 非视频 |
-| **Action100M** | 37GB | Parquet | 0 | 动作元数据 | 非视频 |
-| **BEAT2** | — | 待下载 | — | 动作捕捉 | 非视频 |
-| **EgoExoLearn** | — | 待检查 | — | 技能学习 | 待检查 |
-| **InterHuman** | 78MB | 代码 | 0 | 代码仓库 | 非视频 |
-| **HoloAssist** | 25MB | repo | 0 | AR 协作 | 待下载数据 |
+| 数据集 | 视频数 | 大小 | Caption | 用途 |
+|--------|--------|------|---------|------|
+| **MIRA processed** | 1,918,956 | 5.1TB | JSONL(action)→LLM | 游戏多视角交互 |
+| Charades | 9,848 | 32GB | 动作标签→VLM | 日常居家活动 |
+| EasyCom | 271 | 2.3GB | 对话文本(已有) | AR多人对话 |
+| RAVDESS | 2,880 | 1GB | 低优先级 | 情感表达(已排除) |
+| OpenVidHD | 1,000 | 1.1GB | →VLM | 通用高清视频 |
+| DexYCB | 40 | 19MB | →VLM | 手物抓取 |
+| EPIC | 3 | 295MB | 暂缓 | 厨房HOI |
+| **合计** | **~1,933,000** | **~5.1TB** | | |
 
-### ⏳ 下载中 / 待下载（10 个）
+### 原始数据
 
-| 数据集 | 状态 | 备注 |
-|--------|------|------|
-| **VFHQ** | ⏳ bypy syncdown | 15K 文件夹，Python 脚本后台运行 |
-| **HOI4D** | ⏳ bypy syncdown | RGB 视频分片兼容问题 |
-| **Inter-X** | ⏳ gdown 限流 | 31GB，Google Drive |
-| **Nymeria** | ❌ URL 过期 | Facebook CDN，1,100 视频 983GB |
-| **ViCo** | ❌ 图像数据集 | 按 GitHub 说明为图片序列，已排除 |
-| **LRS2** | ⏳ 需注册 | 牛津大学下载页面 |
-| **CelebV-HQ** | ⏳ YouTube 脚本 | 类似 Action100M，需 yt-dlp |
-| **HD-EPIC** | ⏳ 已排除 | 场景单一 |
-| **Aria ADT/AEA** | ❌ URL 过期 | Facebook CDN |
-| **HOT3D** | ❌ URL 过期 | Facebook CDN |
+| 数据集 | 大小 | 格式 | 说明 |
+|--------|------|------|------|
+| MIRA Rocket Science | 8.3TB | 4,797 tars, 2.1M MP4 | 游戏多视角，持续处理中 |
+| OpenVidHD | 3.0TB | 14 zips, 300K+ MP4 | 通用高清视频 |
+| H2O | 177GB | tar.gz, 183K img | 双手操作图片序列 |
+| DexYCB | 71GB | 3 subjects, 348K img | 手物抓取图片序列 |
+| EasyCom | 102GB | 3,421 files | AR对话(已提取) |
+| EPIC-KITCHENS | 8.7GB | 28 MP4 | 厨房HOI |
+| Charades | 31GB | 9,848 MP4 | 日常活动 |
 
-### 📨 已申请（等待回复）
+### 新下载数据
 
-| 数据集 | 优先级 | 状态 |
-|--------|--------|------|
-| **Ego4D** | P0 | 已申请 |
-| **OpenHumanVid** | P0 | 已申请 |
-| **Assembly101 (Google Drive)** | P0 | 已申请 |
-| **Ego-Exo4D** | P0 | 已申请 |
-| **NoXi** | P1 | 已申请 |
-| **MultiMediate** | P1 | 已申请 |
-
-### ❌ 已排除 — 不适合视频生成（21 个）
-
-| 数据集 | 原因 |
-|--------|------|
-| AMASS | 纯 3D 动作库 |
-| Human3.6M | 3D 关节姿态 |
-| HumanML3D | 3D 动作向量 |
-| Motion-X | 3D 运动向量 |
-| AIST++ | SMPL 3D 参数 |
-| BEAT/BEAT2 | MoCap 动作捕捉 |
-| TalkSHOW | MoCap |
-| Trinity Speech-Gesture | MoCap |
-| GRAB | MoCap |
-| CMU Panoptic | 3D 动捕 |
-| ARCTIC | 仅手部，无环境 |
-| Something-Something V2 | 画质过低 |
-| ViCo | 图像数据集（非视频） |
-| AgiBot World | 机器人关节向量 |
-| CALVIN/LIBERO | 机器人模拟器 |
-| Habitat | 导航模拟器 |
-| AI2-THOR/ALFRED | 室内模拟器 |
-| BEHAVIOR/OmniGibson | 物理模拟器 |
-| VirtualHome/TEACh | 程序化模拟 |
-| RoboCasa365 | 合成数据 |
-| CHiME-6 | 仅音频 |
-
-> 已清理：AgiBot(165GB) + Assembly101(490GB) = 655GB 释放
-
-### 🔜 暂缓（55 个）
-
-以下数据集因优先级较低、获取困难或与当前目标不完全匹配，暂未启动下载：
-
-| 类别 | 数据集 | 数量 |
-|------|--------|------|
-| 大规模视频 URL | Panda-70M, HD-VILA-100M, InternVid, MiraData, WebVid-10M, OpenVid-1M | 6 |
-| 人脸/说话人 | CelebV-HQ, CelebV-Text, TalkingHead-1KH, HDTF, VoxCeleb1/2, VoxBlink2, MEAD | 7 |
-| 唇读/音视频 | LRS2, LRS3, AVSpeech | 3 |
-| 对话/情感 | AMI, NoXi, CREMA-D, RAVDESS(已有), MultiMediate, UDIVA, F2F-JF, M3ED | 8 |
-| 具身/机器人 | DROID, RH20T, BridgeData V2, Open X-Embodiment, MineRL, BEDD | 6 |
-| 模拟器 | AI2-THOR, ALFRED, Habitat, CALVIN, BEHAVIOR, VirtualHome, TEACh, RoboCasa365, MineDojo, LIBERO | 10 |
-| 游戏/合成 | PLAICraft, Matrix-Game 2.0, VPT数据 | 3 |
-| 评测/基准 | OmniMMI, EgoSchema, Full-Duplex-Bench-v2, MBench, MIND, iWorld-Bench, NarraStream-Bench, VideoFDB | 8 |
-| 其他 | EgoCom, Kinetics-700, AVA, SpeakerVid-5M, ResponseNet, TED Gesture, MM-Conv, H2O Handover, DexYCB(已有) | 9 |
+| 数据集 | 大小 | 状态 | Caption | 类型 |
+|--------|------|------|---------|------|
+| **HOIGen-1M** | 235GB | 10 zips 完成 | CSV自带 | 人-物交互 |
+| **Seamless Interaction** | 50GB | 50 tars 完成 | 待检查 | 人人交互 |
+| **Matrix Dataset** | ~1.1TB | git clone中 | 控制信号 | 游戏场景(Forza+Cyberpunk) |
+| Action100M (yt-dlp) | 278 videos | cookies过期 | 动作标签 | 人类动作 |
+| CelebV-HQ (yt-dlp) | 76 videos | cookies过期 | 属性标注 | 数字人脸 |
 
 ---
 
-## 三、Wan2.2 训练数据就绪度
+## 二、下载管线状态
 
-| 数据集 | 视频数 | 格式 | 状态 |
-|--------|--------|------|------|
-| Charades | 9,848 | 720p/24fps MP4 | 可用 |
-| RAVDESS | 2,880 | 720p/24fps MP4 | 可用 |
-| EasyCom | 271 | 720p/24fps MP4 | 可用 |
-| **小计** | **12,999** | | |
-| MIRA | ~162K | 1280×720/20fps MP4 | 待解包转码 |
-| OpenVidHD | ~300K+ | zip 中 MP4 | 待解压转码 |
-| DexYCB | 348K img | 图片序列 | 方案已记录 |
-| H2O | 183K img | 图片序列 | 待转换 |
-
----
-
-## 四、大型通用视频数据策略
-
-目前已下载 **OpenVidHD (2.0TB, ~300K+ 视频)** 作为通用高质量视频训练数据源。OpenVid-1M 还有更多 part 可在空间允许时继续下载。
-
-其他大型通用视频数据集（Panda-70M, HD-VILA-100M, InternVid 等）主要提供 YouTube URL 元数据而非直接视频文件，需 yt-dlp 逐个下载，效率较低。
+| 管线 | 状态 | 进度 |
+|------|------|------|
+| MIRA → Wan2.2 | 活跃 | 1,918,956 视频 |
+| Matrix git clone | 活跃 | ~1.1TB |
+| yt-dlp Action100M | cookies过期 | 278/60,000 |
+| yt-dlp CelebV-HQ | cookies过期 | 76/13,844 |
+| HOI4D bypy | 已停 | 3.3GB |
+| VFHQ bypy | 不可用 | 需百度客户端 |
+| HOT3D/Aria/Nymeria | 不可用 | Facebook CDN 不可达 |
 
 ---
 
-## 五、更新日志
+## 三、Caption 方案
 
-| 日期 | 更新内容 |
-|------|---------|
-| 07-11 | 创建 docs, 下载 CRAMA-D, RAVDESS, Charades, EasyCom, EPIC, HoloAssist |
-| 07-11 | MIRA(660GB), Assembly101(490GB), AgiBot(165GB) 下载 |
-| 07-12 | 大规模下载：OpenVidHD, DexYCB, H2O, HOT3D/Aria URL |
-| 07-12 | Wan2.2 转换：Charades 9,848, RAVDESS 2,880, EasyCom 271 |
-| 07-12 | 清理 AgiBot(165GB), Assembly101(490GB)，排除 21 个不适合数据集 |
-| 07-12 | VFHQ bypy 下载启动, Inter-X gdown 尝试, HoloAssist 直链下载 |
-| 07-12 23:15 | **全 90 数据集状态文档完成** |
+### 已就绪 (有 Caption)
+
+| 数据集 | Caption 来源 | 质量 |
+|--------|------------|------|
+| **HOIGen-1M** | CSV caption_info | 高质量自然语言描述 |
+| EasyCom | 对话转录文本 | 可直接使用 |
+| MIRA | JSONL action/physics | 需LLM模板转为自然语言 |
+
+### 待打标 (需要 Qwen3-VL-235B)
+
+| 数据集 | 视频数 | 帧采样 | 预计时间 |
+|--------|--------|--------|---------|
+| OpenVidHD | 300K+ | 8帧/视频 | ~1.7天 |
+| Charades | 9,848 | 8帧/视频 | ~1.5小时 |
+| DexYCB (→视频) | 348K img | 先处理 | 待定 |
+| H2O (→视频) | 183K img | 先处理 | 待定 |
+
+### 打标方案
+
+```
+方案 A: Qwen3-VL-235B-A22B (最高质量)
+  8帧采样 → 自然语言描述
+  8副本 → 80-120 videos/min
+
+方案 B: HOIGen-1M CSV (直接使用)
+  1M+ video-caption pairs 直接可用
+
+方案 C: MIRA JSONL 模板
+  action/physics数据 → LLM模板 → 自然语言caption
+```
+
+---
+
+## 四、数据集全列表 (90个)
+
+### 已下载 (14个)
+MIRA, OpenVidHD, Charades, EasyCom, H2O, DexYCB, EPIC-KITCHENS, RAVDESS, CREMA-D, InterHuman, HoloAssist, Action100M, CRAMA-D, BEAT2
+
+### 下载中 (8个)
+HOIGen-1M, Seamless Interaction, Matrix Dataset, HOI4D, VFHQ, Inter-X, HOT3D, Aria ADT/AEA
+
+### 已申请 (10个)
+Ego4D, OpenHumanVid, Assembly101, Ego-Exo4D, Nymeria, LRS2, LRS3, NoXi, MultiMediate, UDIVA
+
+### 已排除 (21个)
+AMASS, Human3.6M, HumanML3D, Motion-X, AIST++, BEAT, TalkSHOW, Trinity, GRAB, CMU Panoptic, ARCTIC, Something-Something V2, ViCo, AgiBot World, CALVIN, LIBERO, Habitat, AI2-THOR, ALFRED, BEHAVIOR, VirtualHome, TEACh, RoboCasa365, CHiME-6
+
+### 暂缓 (37个)
+其余模拟器/机器人/评测/音频数据集
