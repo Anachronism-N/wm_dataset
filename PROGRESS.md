@@ -10,7 +10,7 @@
 
 | 数据集 | 视频数 | 大小 | Caption | 用途 |
 |--------|--------|------|---------|------|
-| **MIRA processed** | 1,918,956 | 5.1TB | JSONL(action)→LLM | 游戏多视角交互 |
+| **MIRA processed** | 2,041,279 | 5.4TB | JSONL(action)→LLM | 游戏多视角交互 |
 | Charades | 9,848 | 32GB | 动作标签→VLM | 日常居家活动 |
 | EasyCom | 271 | 2.3GB | 对话文本(已有) | AR多人对话 |
 | RAVDESS | 2,880 | 1GB | 低优先级 | 情感表达(已排除) |
