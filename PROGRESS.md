@@ -1,6 +1,101 @@
 # 项目进展全记录
 
-> 最后更新：2026-08-12
+> 最后更新：2026-08-18
+
+---
+
+## 0、本轮推进记录（2026-08-18）
+
+### 数据处理全部完成
+
+14 个数据集全部完成转码/切分为 Wan2.2-TI2V 格式（1280×704/704×1280, 24fps, 4s clips, libopenh264）：
+
+| 数据集 | clips | 状态 |
+|---|---|---|
+| MIRA | 2,073,297 | ✅ 无需转码（已有 caption_i2v） |
+| Ego-Exo4D | 22,161 | ✅ 转码完成（50,383 视频 → 22,161 有效 clips） |
+| CelebV-HQ | 1,277,996 | ✅ 转码完成（12,988 视频 → 1.28M clips） |
+| HOIGen | 231,084 | ✅ |
+| Charades | 73,603 | ✅ |
+| NoXi | 41,744 | ✅ |
+| VFHQ | 34,173 | ✅ |
+| Seamless | 25,432 | ✅ |
+| Direct (Project Aria) | 25,312 | ✅ |
+| Matrix | 14,124 | ✅ |
+| EasyCom | 3,920 | ✅ |
+| DexYCB | 2,400 | ✅ |
+| OpenVidHD | 1,317 | ✅ |
+| H2O | 297 | ✅ |
+| **合计** | **~3.83M clips** | |
+
+### HF 上传进度
+
+仓库 `NZC415/wan22-processed-clips`（已改为公开仓库，无存储限制）
+
+| 数据集 | shards | 状态 |
+|---|---|---|
+| H2O | 1 | ✅ |
+| OpenVidHD | 1 | ✅ |
+| DexYCB | 1 | ✅ |
+| EasyCom | 2 | ✅ |
+| Matrix | 5 | ✅ |
+| Direct | 8 | ✅ |
+| Seamless | 4 | ✅ |
+| VFHQ | 9 | ✅ |
+| NoXi | 4 | ✅ |
+| Charades | 14 | ✅ |
+| HOIGen | 24/61 | 🔄 上传中 |
+| Ego-Exo4D | ~3 | ⏳ |
+| CelebV-HQ | ~160 | ⏳ |
+| MIRA | ~1013 | ⏳ |
+| **已上传** | **73 shards (~584GB)** | |
+
+### Caption 进度
+
+| 数据集 | clips | 已 caption | 状态 |
+|---|---|---|---|
+| MIRA | 2,073,297 | 1,216,449 | ✅ 已有 caption_i2v |
+| HOIGen | 231,084 | 231,083 | ✅ |
+| CelebV-HQ | 1,277,996 | 0 | ❌ 待 caption（queue 已就绪） |
+| Charades | 73,603 | 73,601 | ✅ |
+| NoXi | 41,744 | 41,744 | ✅ |
+| VFHQ | 34,173 | 34,173 | ✅ |
+| Seamless | 25,432 | 25,432 | ✅ |
+| Direct | 25,312 | 25,310 | ✅ |
+| Ego-Exo4D | 22,161 | 22,161 | ✅ |
+| Matrix | 14,124 | 14,124 | ✅ |
+| EasyCom | 3,920 | 3,913 | ✅ |
+| DexYCB | 2,400 | 2,400 | ✅ |
+| OpenVidHD | 1,317 | 1,317 | ✅ |
+| H2O | 297 | 297 | ✅ |
+| **合计** | **~3.83M** | **~1.69M (44%)** | |
+
+### Caption Queue 文件
+
+位置：`training_metadata/caption_queues/`
+
+| 文件 | clips | 说明 |
+|---|---|---|
+| `celebvhq.jsonl` | 1,277,996 | 待 caption，最大批次 |
+| `egoexo4d_full.jsonl` | 22,161 | 已完成 ✅ |
+| `matrix_full.jsonl` | 14,124 | 已完成 ✅ |
+| `caption_queue_all.jsonl` | 469,007 | 合并清单（不含 CelebV-HQ/MIRA） |
+
+### 新增数据集（本轮）
+
+| 数据集 | 来源 | clips | 说明 |
+|---|---|---|---|
+| CelebV-HQ | `NZC415/CelebV-HQ-archives` (HF) | 1,277,996 | 数字人脸视频 |
+| VFHQ | `NZC415/VFHQ-videos-archives` (HF) | 34,173 | 人脸视频 |
+| Direct (Project Aria) | `NZC415/direct-downloads-archives` (HF) | 25,312 | ADT/HOT3D/AEA 等第一人称 |
+
+### 仍在进行
+
+| 任务 | 状态 |
+|---|---|
+| HOIGen HF 上传 | 🔄 24/61 shards |
+| HoloAssist 修复 | 39.7%（~33 天，不阻塞） |
+| CelebV-HQ caption | ❌ 待 caption（128 万 clips） |
 
 ---
 
