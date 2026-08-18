@@ -15,15 +15,14 @@ Usage:
 """
 
 import argparse
+import csv
 import json
 import os
 import random
 import subprocess
+import tempfile
 from collections import Counter
 from pathlib import Path
-
-PROJECT_ROOT = Path("/apdcephfs_gy2/share_302533218/cedricnie/wm_dataset")
-
 
 def ffprobe_video(path):
     """Return dict with width/height/fps/duration or None if undecodable."""
@@ -68,17 +67,27 @@ def extract_first_frame(path, out_path):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--n", type=int, default=500, help="Number of samples to audit")
-    ap.add_argument("--manifest", type=Path,
-                    default=PROJECT_ROOT / "training_metadata" / "unified_train.jsonl")
+    ap.add_argument("--manifest", type=Path, required=True,
+                    help="Rich JSONL or DiffSynth CSV manifest")
+    ap.add_argument("--base-path", type=Path,
+                    help="Dataset base path for relative video paths")
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--out", type=Path,
-                    default=PROJECT_ROOT / "training_metadata" / "decode_audit_report.json")
+                    help="Report path (default: next to the input manifest)")
     args = ap.parse_args()
 
     rows = []
-    with open(args.manifest, encoding="utf-8") as f:
-        for line in f:
-            rows.append(json.loads(line))
+    if args.manifest.suffix.lower() == ".csv":
+        with open(args.manifest, encoding="utf-8-sig", newline="") as f:
+            rows.extend(csv.DictReader(f))
+    else:
+        with open(args.manifest, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    rows.append(json.loads(line))
+    if not rows:
+        ap.error(f"manifest is empty: {args.manifest}")
 
     rng = random.Random(args.seed)
     rng.shuffle(rows)
@@ -93,44 +102,49 @@ def main():
     fail_decode = 0
     fail_first_frame = 0
 
-    tmp_frame = "/tmp/_audit_frame.jpg"
-    for i, r in enumerate(sample, 1):
-        src = r.get("source_dataset", "?")
-        path = r["video_path"]
-        by_source[src] += 1
+    with tempfile.TemporaryDirectory(prefix="wm_decode_audit_") as temp_dir:
+        tmp_frame = str(Path(temp_dir) / "first_frame.jpg")
+        for i, r in enumerate(sample, 1):
+            src = r.get("source_dataset", "?")
+            path = r.get("video_path") or r.get("video")
+            if not path:
+                missing_file += 1
+                results.append({"path": "", "source": src, "status": "missing_video_field"})
+                continue
+            path = str(path)
+            if args.base_path and not os.path.isabs(path):
+                path = str(args.base_path / path)
+            by_source[src] += 1
 
-        if not os.path.exists(path):
-            missing_file += 1
-            results.append({"path": path, "source": src, "status": "missing_file"})
-            if i % 50 == 0:
-                print(f"  [{i}/{len(sample)}] missing={missing_file} ok_decode={ok_decode}")
-            continue
+            if not os.path.exists(path):
+                missing_file += 1
+                results.append({"path": path, "source": src, "status": "missing_file"})
+                if i % 50 == 0:
+                    print(f"  [{i}/{len(sample)}] missing={missing_file} ok_decode={ok_decode}")
+                continue
 
-        info = ffprobe_video(path)
-        if info is None:
-            fail_decode += 1
-            results.append({"path": path, "source": src, "status": "fail_decode"})
-        else:
-            ok_decode += 1
-            ff_ok = extract_first_frame(path, tmp_frame)
-            if ff_ok:
-                ok_first_frame += 1
-                status = "ok"
+            info = ffprobe_video(path)
+            if info is None:
+                fail_decode += 1
+                results.append({"path": path, "source": src, "status": "fail_decode"})
             else:
-                fail_first_frame += 1
-                status = "fail_first_frame"
-            results.append({
-                "path": path, "source": src, "status": status,
-                "width": info["width"], "height": info["height"],
-                "fps": info["fps"], "duration": info["duration"],
-            })
+                ok_decode += 1
+                ff_ok = extract_first_frame(path, tmp_frame)
+                if ff_ok:
+                    ok_first_frame += 1
+                    status = "ok"
+                else:
+                    fail_first_frame += 1
+                    status = "fail_first_frame"
+                results.append({
+                    "path": path, "source": src, "status": status,
+                    "width": info["width"], "height": info["height"],
+                    "fps": info["fps"], "duration": info["duration"],
+                })
 
-        if i % 50 == 0:
-            print(f"  [{i}/{len(sample)}] ok={ok_decode} ff_ok={ok_first_frame} "
-                  f"missing={missing_file} fail_dec={fail_decode} fail_ff={fail_first_frame}")
-
-    if os.path.exists(tmp_frame):
-        os.remove(tmp_frame)
+            if i % 50 == 0:
+                print(f"  [{i}/{len(sample)}] ok={ok_decode} ff_ok={ok_first_frame} "
+                      f"missing={missing_file} fail_dec={fail_decode} fail_ff={fail_first_frame}")
 
     total = len(sample)
     report = {
@@ -145,6 +159,9 @@ def main():
         "by_source": dict(by_source),
         "results": results,
     }
+    if args.out is None:
+        args.out = args.manifest.with_name(f"{args.manifest.stem}_decode_audit.json")
+    args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
 
     print("\n=== Decode Audit Report ===")

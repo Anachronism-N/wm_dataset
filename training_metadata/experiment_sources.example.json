@@ -1,0 +1,98 @@
+{
+  "schema_version": 1,
+  "seed": 20260818,
+  "dataset_base_path": "${WM_DATA_ROOT}",
+  "emit_relative_paths": true,
+  "val_ratio": 0.1,
+  "max_source_fraction": 0.3,
+  "caption_quality": {
+    "min_chars": 24,
+    "max_chars": 420,
+    "max_exact_caption_repeats": 4,
+    "reject_patterns": [
+      "\\bvideo[_ -]?id\\s*:",
+      "\\bfile(?:name)?\\s*:",
+      "^A person performing a daily activity"
+    ]
+  },
+  "sources": [
+    {
+      "name": "hoigen1m",
+      "manifest": "${WM_DATA_ROOT}/dataset/wan22_training/hoigen1m_wan22/manifest_wan22.jsonl",
+      "caption_fields": ["prompt", "caption", "caption_detailed"],
+      "quotas": {"smoke": 48, "pilot": 10000, "scale": 30000}
+    },
+    {
+      "name": "egoexo4d",
+      "manifest": "${WM_DATA_ROOT}/dataset/wan22_training/egoexo4d_wan22/manifest_wan22.jsonl",
+      "quotas": {"smoke": 40, "pilot": 6000, "scale": 22000}
+    },
+    {
+      "name": "charades",
+      "manifest": "${WM_DATA_ROOT}/dataset/wan22_training/charades_wan22/manifest_wan22.jsonl",
+      "quotas": {"smoke": 32, "pilot": 6000, "scale": 20000}
+    },
+    {
+      "name": "noxi",
+      "manifest": "${WM_DATA_ROOT}/dataset/wan22_training/noxi_wan22/manifest_wan22.jsonl",
+      "quotas": {"smoke": 32, "pilot": 5000, "scale": 12000}
+    },
+    {
+      "name": "direct",
+      "manifest": "${WM_DATA_ROOT}/dataset/wan22_training/direct_wan22/manifest_wan22.jsonl",
+      "quotas": {"smoke": 24, "pilot": 4000, "scale": 10000}
+    },
+    {
+      "name": "vfhq",
+      "manifest": "${WM_DATA_ROOT}/dataset/wan22_training/vfhq_wan22/manifest_wan22.jsonl",
+      "quotas": {"smoke": 24, "pilot": 3000, "scale": 8000}
+    },
+    {
+      "name": "matrix",
+      "manifest": "${WM_DATA_ROOT}/dataset/wan22_training/matrix_wan22/manifest_wan22.jsonl",
+      "quotas": {"smoke": 16, "pilot": 2000, "scale": 5000}
+    },
+    {
+      "name": "mira",
+      "manifest": "${WM_DATA_ROOT}/dataset/manifests/mira_captions_final.jsonl",
+      "caption_fields": ["caption_i2v", "prompt", "caption"],
+      "quotas": {"smoke": 16, "pilot": 2000, "scale": 5000}
+    },
+    {
+      "name": "easycom",
+      "manifest": "${WM_DATA_ROOT}/dataset/wan22_training/easycom_wan22/manifest_wan22.jsonl",
+      "quotas": {"smoke": 12, "pilot": 1500, "scale": 3000}
+    },
+    {
+      "name": "dexycb",
+      "manifest": "${WM_DATA_ROOT}/dataset/wan22_training/dexycb_processed/manifest_wan22.jsonl",
+      "quotas": {"smoke": 8, "pilot": 1000, "scale": 2400}
+    },
+    {
+      "name": "h2o",
+      "manifest": "${WM_DATA_ROOT}/dataset/wan22_training/h2o_wan22/manifest_wan22.jsonl",
+      "quotas": {"smoke": 4, "pilot": 297, "scale": 297}
+    },
+    {
+      "name": "celebvhq",
+      "enabled": false,
+      "status": "Enable only after caption coverage and quality gates pass.",
+      "manifest": "${WM_DATA_ROOT}/dataset/wan22_training/celebvhq_wan22/manifest_wan22.jsonl",
+      "quotas": {"smoke": 0, "pilot": 0, "scale": 0}
+    },
+    {
+      "name": "seamless_portrait",
+      "enabled": false,
+      "status": "Run as a separate 704x1280 bucket, not in the landscape pilot.",
+      "manifest": "${WM_DATA_ROOT}/dataset/wan22_training/seamless_wan22/manifest_wan22.jsonl",
+      "quotas": {"smoke": 0, "pilot": 0, "scale": 0}
+    },
+    {
+      "name": "openvidhd_portrait",
+      "enabled": false,
+      "status": "Run as a separate portrait/diversity ablation.",
+      "manifest": "${WM_DATA_ROOT}/dataset/wan22_training/openvidhd_wan22/manifest_wan22.jsonl",
+      "quotas": {"smoke": 0, "pilot": 0, "scale": 0}
+    }
+  ]
+}

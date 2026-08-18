@@ -1,307 +1,545 @@
 #!/usr/bin/env python3
+"""Build reproducible, group-isolated Wan2.2 experiment manifests.
+
+The old version of this script embedded one cluster path and silently accepted
+empty or template captions. This implementation is driven by a JSON source
+specification, freezes every input hash, and writes both rich JSONL manifests
+and the two-column CSV consumed by DiffSynth-Studio.
+
+Example:
+    export WM_DATA_ROOT=/path/to/wm_dataset
+    python scripts/build_unified_manifest.py \
+        --config training_metadata/experiment_sources.example.json \
+        --phase smoke --check-files
 """
-Build a unified Wan2.2 training manifest from per-dataset manifests.
 
-Produces:
-  - training_metadata/unified_train.jsonl
-  - training_metadata/unified_val.jsonl
-  - training_metadata/unified_train.csv  (DiffSynth format: video,prompt)
-  - training_metadata/unified_val.csv
-
-Design rules (from docs/24_Wan2.2首轮训练执行计划.md):
-  - Normalize field names across sources (video vs video_path; caption vs caption_i2v).
-  - Split train/val by source_sequence_id so adjacent clips never leak across splits.
-  - Cap any single source at 50% of the unified set.
-  - Deduplicate by source_sequence_id (one clip per source sequence per split).
-  - Skip entries without a usable caption.
-
-Usage:
-    python3 scripts/build_unified_manifest.py
-    python3 scripts/build_unified_manifest.py --target 30000 --val-ratio 0.1
-"""
+from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import json
 import os
-import random
-from collections import defaultdict
+import re
+import subprocess
+import sys
+from collections import Counter, defaultdict
+from datetime import datetime, timezone
 from pathlib import Path
-
-PROJECT_ROOT = Path("/apdcephfs_gy2/share_302533218/cedricnie/wm_dataset")
-WT_DIR = PROJECT_ROOT / "dataset" / "wan22_training"
-MANIFESTS_DIR = PROJECT_ROOT / "dataset" / "manifests"
-OUTPUT_DIR = PROJECT_ROOT / "training_metadata"
-
-# Per-source config: uses *_wan22/manifest_wan22.jsonl for processed datasets (4s clips, 1280x704 24fps)
-# MIRA uses mira_captions_final.jsonl (already has caption_i2v, videos already in format)
-# Caption is empty for most (TBD by VLM); MIRA already has captions.
-SOURCE_CONFIGS = [
-    {
-        "name": "hoigen1m",
-        "manifest": WT_DIR / "hoigen1m_wan22" / "manifest_wan22.jsonl",
-        "target": 20000,
-        "video_field": "video_path",
-        "caption_field": "prompt",
-        "source_id_field": "source_sequence_id",
-    },
-    {
-        "name": "mira",
-        "manifest": MANIFESTS_DIR / "mira_captions_final.jsonl",
-        "target": 10000,
-        "video_field": "video_path",
-        "caption_field": "caption_i2v",
-        "source_id_field": "source_sequence_id",
-    },
-    {
-        "name": "charades",
-        "manifest": WT_DIR / "charades_wan22" / "manifest_wan22.jsonl",
-        "target": 10000,
-        "video_field": "video_path",
-        "caption_field": "prompt",
-        "source_id_field": "source_sequence_id",
-    },
-    {
-        "name": "noxi",
-        "manifest": WT_DIR / "noxi_wan22" / "manifest_wan22.jsonl",
-        "target": 5000,
-        "video_field": "video_path",
-        "caption_field": "prompt",
-        "source_id_field": "source_sequence_id",
-    },
-    {
-        "name": "matrix",
-        "manifest": WT_DIR / "matrix_wan22" / "manifest_wan22.jsonl",
-        "target": 5000,
-        "video_field": "video_path",
-        "caption_field": "prompt",
-        "source_id_field": "source_sequence_id",
-    },
-    {
-        "name": "dexycb",
-        "manifest": WT_DIR / "dexycb_processed" / "manifest_wan22.jsonl",
-        "target": 2400,
-        "video_field": "video_path",
-        "caption_field": "prompt",
-        "source_id_field": "source_sequence_id",
-    },
-    {
-        "name": "easycom",
-        "manifest": WT_DIR / "easycom_wan22" / "manifest_wan22.jsonl",
-        "target": 3920,
-        "video_field": "video_path",
-        "caption_field": "prompt",
-        "source_id_field": "source_sequence_id",
-    },
-    {
-        "name": "h2o",
-        "manifest": WT_DIR / "h2o_wan22" / "manifest_wan22.jsonl",
-        "target": 297,
-        "video_field": "video_path",
-        "caption_field": "prompt",
-        "source_id_field": "source_sequence_id",
-    },
-    {
-        "name": "seamless",
-        "manifest": WT_DIR / "seamless_wan22" / "manifest_wan22.jsonl",
-        "target": 10000,
-        "video_field": "video_path",
-        "caption_field": "prompt",
-        "source_id_field": "source_sequence_id",
-    },
-    {
-        "name": "egoexo4d",
-        "manifest": WT_DIR / "egoexo4d_wan22" / "manifest_wan22.jsonl",
-        "target": 10000,
-        "video_field": "video_path",
-        "caption_field": "prompt",
-        "source_id_field": "source_sequence_id",
-    },
-    {
-        "name": "openvidhd",
-        "manifest": WT_DIR / "openvidhd_wan22" / "manifest_wan22.jsonl",
-        "target": 1317,  # all
-        "video_field": "video_path",
-        "caption_field": "prompt",
-        "source_id_field": "source_sequence_id",
-    },
-]
+from typing import Any, Iterable, Iterator
 
 
-def load_source(cfg):
-    """Load one source manifest, normalize fields, dedup by source_id."""
-    name = cfg["name"]
-    path = cfg["manifest"]
-    if not path.exists():
-        print(f"  SKIP {name}: manifest not found at {path}")
-        return []
+DEFAULT_VIDEO_FIELDS = ("video_path", "video")
+DEFAULT_CAPTION_FIELDS = ("prompt", "caption", "caption_i2v")
+DEFAULT_SEQUENCE_FIELDS = (
+    "source_sequence_id",
+    "source_video_id",
+    "original_video_id",
+    "sample_id",
+    "video_id",
+)
 
-    vfield = cfg["video_field"]
-    cfield = cfg["caption_field"]
-    sfield = cfg["source_id_field"]
-    base_path = cfg.get("base_path")  # optional: join to relative video paths
 
-    rows = []
-    seen_seq = set()
-    n_read = 0
-    n_skip_no_video = 0
-    n_skip_no_caption = 0
-    n_skip_dup_seq = 0
+class ManifestBuildError(RuntimeError):
+    """Raised when an experiment manifest cannot be frozen safely."""
 
-    with open(path, encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            n_read += 1
-            try:
-                d = json.loads(line)
-            except json.JSONDecodeError:
-                continue
 
-            video = d.get(vfield) or d.get("video_path") or d.get("video")
-            caption = d.get(cfield) or d.get("caption") or d.get("caption_i2v")
-            source_id = d.get(sfield) or ""
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
-            if not video:
-                n_skip_no_video += 1
-                continue
-            # If video is a relative filename and a base_path is configured, join them.
-            if base_path and not os.path.isabs(str(video)):
-                video = str(base_path / video)
-            # Allow empty captions — VLM captioning is done later.
-            caption = str(caption).strip() if caption else ""
 
-            # No dedup by source_sequence_id — each 4s clip is a unique training sample.
-            # source_sequence_id is used for train/val split isolation (all clips from
-            # the same source video go to the same split).
+def stable_score(seed: int, *parts: object) -> str:
+    value = "\x1f".join([str(seed), *(str(part) for part in parts)])
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
-            rows.append({
+
+def expand_path(value: str, *, relative_to: Path) -> Path:
+    expanded = os.path.expanduser(os.path.expandvars(str(value)))
+    if "$" in expanded:
+        raise ManifestBuildError(
+            f"Unresolved environment variable in path: {value!r}. "
+            "Set WM_DATA_ROOT (or the variable used by the config)."
+        )
+    path = Path(expanded)
+    if not path.is_absolute():
+        path = relative_to / path
+    return path.resolve(strict=False)
+
+
+def iter_manifest(path: Path) -> Iterator[dict[str, Any]]:
+    suffix = path.suffix.lower()
+    if suffix == ".csv":
+        with path.open("r", encoding="utf-8-sig", newline="") as handle:
+            yield from csv.DictReader(handle)
+        return
+    if suffix == ".json":
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(payload, list):
+            raise ManifestBuildError(f"JSON manifest must contain a list: {path}")
+        for row in payload:
+            if isinstance(row, dict):
+                yield row
+        return
+    if suffix == ".jsonl":
+        with path.open("r", encoding="utf-8") as handle:
+            for line_number, line in enumerate(handle, 1):
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    row = json.loads(line)
+                except json.JSONDecodeError as exc:
+                    raise ManifestBuildError(
+                        f"Invalid JSONL at {path}:{line_number}: {exc}"
+                    ) from exc
+                if not isinstance(row, dict):
+                    raise ManifestBuildError(
+                        f"Expected an object at {path}:{line_number}"
+                    )
+                yield row
+        return
+    raise ManifestBuildError(f"Unsupported manifest format: {path}")
+
+
+def first_value(row: dict[str, Any], fields: Iterable[str]) -> Any:
+    for field in fields:
+        value = row.get(field)
+        if value is not None and str(value).strip():
+            return value
+    return None
+
+
+def normalize_caption(value: Any) -> str:
+    return re.sub(r"\s+", " ", str(value or "")).strip()
+
+
+def derive_sequence_id(video_path: str) -> str:
+    stem = Path(video_path).stem
+    return re.sub(r"[_-]\d{3,6}$", "", stem)
+
+
+def resolve_video_path(
+    raw_value: Any,
+    *,
+    source_base: Path,
+    dataset_base: Path,
+    emit_relative_paths: bool,
+) -> tuple[str, Path | None]:
+    raw = str(raw_value).strip()
+    if raw.startswith(("http://", "https://")):
+        return raw, None
+    expanded = os.path.expanduser(os.path.expandvars(raw))
+    if "$" in expanded:
+        raise ManifestBuildError(f"Unresolved environment variable in video path: {raw}")
+    candidate = Path(expanded)
+    resolved = candidate if candidate.is_absolute() else source_base / candidate
+    resolved = resolved.resolve(strict=False)
+    if not emit_relative_paths:
+        return str(resolved), resolved
+    try:
+        return resolved.relative_to(dataset_base).as_posix(), resolved
+    except ValueError:
+        return str(resolved), resolved
+
+
+def caption_rejection_reason(
+    caption: str,
+    *,
+    min_chars: int,
+    max_chars: int,
+    reject_patterns: list[re.Pattern[str]],
+) -> str | None:
+    if not caption:
+        return "empty_caption"
+    if len(caption) < min_chars:
+        return "caption_too_short"
+    if len(caption) > max_chars:
+        return "caption_too_long"
+    for pattern in reject_patterns:
+        if pattern.search(caption):
+            return f"caption_pattern:{pattern.pattern}"
+    return None
+
+
+def load_source(
+    source: dict[str, Any],
+    *,
+    phase: str,
+    config_dir: Path,
+    dataset_base: Path,
+    seed: int,
+    quality: dict[str, Any],
+    check_files: bool,
+    emit_relative_paths: bool,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    name = str(source["name"])
+    quota = int(source.get("quotas", {}).get(phase, 0))
+    stats: dict[str, Any] = {
+        "manifest": None,
+        "input_sha256": None,
+        "quota": quota,
+        "read": 0,
+        "selected": 0,
+        "shortfall": 0,
+        "rejected": Counter(),
+    }
+    if not source.get("enabled", True) or quota <= 0:
+        stats["status"] = "disabled_for_phase"
+        stats["rejected"] = {}
+        return [], stats
+
+    manifest = expand_path(str(source["manifest"]), relative_to=config_dir)
+    stats["manifest"] = str(manifest)
+    if not manifest.is_file():
+        raise ManifestBuildError(f"Source {name!r} manifest does not exist: {manifest}")
+    stats["input_sha256"] = sha256_file(manifest)
+
+    source_base_value = source.get("base_path")
+    source_base = (
+        expand_path(str(source_base_value), relative_to=config_dir)
+        if source_base_value
+        else dataset_base
+    )
+    video_fields = source.get("video_fields", DEFAULT_VIDEO_FIELDS)
+    caption_fields = source.get("caption_fields", DEFAULT_CAPTION_FIELDS)
+    sequence_fields = source.get("sequence_fields", DEFAULT_SEQUENCE_FIELDS)
+    min_chars = int(source.get("min_caption_chars", quality["min_chars"]))
+    max_chars = int(source.get("max_caption_chars", quality["max_chars"]))
+    patterns = [
+        re.compile(pattern, re.IGNORECASE)
+        for pattern in [*quality.get("reject_patterns", []), *source.get("reject_patterns", [])]
+    ]
+    max_caption_repeats = int(
+        source.get("max_exact_caption_repeats", quality["max_exact_caption_repeats"])
+    )
+
+    candidates: list[dict[str, Any]] = []
+    seen_videos: set[str] = set()
+    for row in iter_manifest(manifest):
+        stats["read"] += 1
+        video_value = first_value(row, video_fields)
+        if video_value is None:
+            stats["rejected"]["missing_video_field"] += 1
+            continue
+        caption = normalize_caption(first_value(row, caption_fields))
+        reason = caption_rejection_reason(
+            caption,
+            min_chars=min_chars,
+            max_chars=max_chars,
+            reject_patterns=patterns,
+        )
+        if reason:
+            stats["rejected"][reason] += 1
+            continue
+        video, resolved = resolve_video_path(
+            video_value,
+            source_base=source_base,
+            dataset_base=dataset_base,
+            emit_relative_paths=emit_relative_paths,
+        )
+        if video in seen_videos:
+            stats["rejected"]["duplicate_video"] += 1
+            continue
+        if check_files and resolved is not None and not resolved.is_file():
+            stats["rejected"]["missing_file"] += 1
+            continue
+        sequence_value = first_value(row, sequence_fields)
+        sequence_id = str(sequence_value).strip() if sequence_value is not None else ""
+        if not sequence_id:
+            sequence_id = derive_sequence_id(video)
+        sequence_id = f"{name}:{sequence_id}"
+        candidates.append(
+            {
                 "video_path": video,
-                "prompt": str(caption).strip(),
+                "prompt": caption,
                 "source_dataset": name,
-                "source_sequence_id": source_id or f"{name}:{Path(video).stem}",
-            })
+                "source_sequence_id": sequence_id,
+            }
+        )
+        seen_videos.add(video)
 
-    print(f"  {name}: read={n_read} kept={len(rows)} "
-          f"(no_video={n_skip_no_video} no_caption={n_skip_no_caption} dup_seq={n_skip_dup_seq})")
-    return rows
+    candidates.sort(
+        key=lambda row: stable_score(seed, name, row["source_sequence_id"], row["video_path"])
+    )
+    caption_counts: Counter[str] = Counter()
+    filtered: list[dict[str, Any]] = []
+    for row in candidates:
+        caption_key = row["prompt"].casefold()
+        if caption_counts[caption_key] >= max_caption_repeats:
+            stats["rejected"]["repeated_caption"] += 1
+            continue
+        caption_counts[caption_key] += 1
+        filtered.append(row)
+
+    by_sequence: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in filtered:
+        by_sequence[row["source_sequence_id"]].append(row)
+    sequence_ids = sorted(
+        by_sequence,
+        key=lambda sequence_id: stable_score(seed, phase, name, sequence_id),
+    )
+    selected: list[dict[str, Any]] = []
+    for sequence_id in sequence_ids:
+        group = sorted(
+            by_sequence[sequence_id],
+            key=lambda row: stable_score(seed, phase, row["video_path"]),
+        )
+        remaining = quota - len(selected)
+        if remaining <= 0:
+            break
+        selected.extend(group[:remaining])
+
+    stats["selected"] = len(selected)
+    stats["shortfall"] = max(0, quota - len(selected))
+    stats["candidate_sequences"] = len(by_sequence)
+    stats["selected_sequences"] = len({row["source_sequence_id"] for row in selected})
+    stats["rejected"] = dict(sorted(stats["rejected"].items()))
+    stats["status"] = "ok" if not stats["shortfall"] else "shortfall"
+    if check_files and stats["rejected"].get("missing_file"):
+        raise ManifestBuildError(
+            f"Source {name!r} has {stats['rejected']['missing_file']} missing files. "
+            "The phase was not frozen."
+        )
+    return selected, stats
 
 
-def split_by_sequence(rows, val_ratio=0.1, seed=42):
-    """Split into train/val by source_sequence_id (no leakage)."""
-    by_seq = defaultdict(list)
-    for r in rows:
-        by_seq[r["source_sequence_id"]].append(r)
+def split_by_sequence(
+    rows: list[dict[str, Any]], *, val_ratio: float, seed: int
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    by_source_sequence: dict[str, dict[str, list[dict[str, Any]]]] = defaultdict(
+        lambda: defaultdict(list)
+    )
+    for row in rows:
+        by_source_sequence[row["source_dataset"]][row["source_sequence_id"]].append(row)
 
-    seq_ids = sorted(by_seq.keys())
-    rng = random.Random(seed)
-    rng.shuffle(seq_ids)
+    validation_sequences: set[str] = set()
+    for source, groups in by_source_sequence.items():
+        sequence_ids = sorted(
+            groups,
+            key=lambda sequence_id: stable_score(seed, "validation", source, sequence_id),
+        )
+        if val_ratio <= 0 or len(sequence_ids) < 2:
+            count = 0
+        else:
+            count = max(1, round(len(sequence_ids) * val_ratio))
+            count = min(count, len(sequence_ids) - 1)
+        validation_sequences.update(sequence_ids[:count])
 
-    n_val = max(1, int(len(seq_ids) * val_ratio))
-    val_seqs = set(seq_ids[:n_val])
-
-    train, val = [], []
-    for sid in seq_ids:
-        for r in by_seq[sid]:
-            (val if sid in val_seqs else train).append(r)
+    train: list[dict[str, Any]] = []
+    val: list[dict[str, Any]] = []
+    for row in rows:
+        destination = val if row["source_sequence_id"] in validation_sequences else train
+        copied = dict(row)
+        copied["split"] = "val" if destination is val else "train"
+        destination.append(copied)
+    train.sort(key=lambda row: stable_score(seed, "train", row["video_path"]))
+    val.sort(key=lambda row: stable_score(seed, "val", row["video_path"]))
     return train, val
 
 
-def cap_single_source(rows, max_fraction=0.5, seed=42):
-    """Cap any single source at max_fraction of total. Downsample over-represented sources."""
-    by_src = defaultdict(list)
-    for r in rows:
-        by_src[r["source_dataset"]].append(r)
-
+def enforce_source_fraction(rows: list[dict[str, Any]], maximum: float) -> None:
+    counts = Counter(row["source_dataset"] for row in rows)
     total = len(rows)
-    cap = int(total * max_fraction)
-    rng = random.Random(seed)
-
-    capped = []
-    for src, items in by_src.items():
-        if len(items) > cap:
-            rng.shuffle(items)
-            items = items[:cap]
-            print(f"  cap {src}: {len(by_src[src])} -> {len(items)}")
-        capped.extend(items)
-    rng.shuffle(capped)
-    return capped
+    violations = {
+        source: count / total
+        for source, count in counts.items()
+        if total and count / total > maximum + 1e-12
+    }
+    if violations:
+        details = ", ".join(f"{name}={fraction:.1%}" for name, fraction in violations.items())
+        raise ManifestBuildError(
+            f"Configured source mix exceeds max_source_fraction={maximum:.1%}: {details}"
+        )
 
 
-def write_jsonl(rows, path):
-    with open(path, "w", encoding="utf-8") as f:
-        for r in rows:
-            f.write(json.dumps(r, ensure_ascii=False) + "\n")
+def write_jsonl(rows: list[dict[str, Any]], path: Path) -> None:
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    with temporary.open("w", encoding="utf-8", newline="\n") as handle:
+        for row in rows:
+            handle.write(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n")
+    os.replace(temporary, path)
 
 
-def write_csv(rows, path):
-    with open(path, "w", encoding="utf-8", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=["video", "prompt"])
-        w.writeheader()
-        for r in rows:
-            w.writerow({"video": r["video_path"], "prompt": r["prompt"]})
+def write_diffsynth_csv(rows: list[dict[str, Any]], path: Path) -> None:
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    with temporary.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=["video", "prompt"])
+        writer.writeheader()
+        for row in rows:
+            writer.writerow({"video": row["video_path"], "prompt": row["prompt"]})
+    os.replace(temporary, path)
 
 
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--val-ratio", type=float, default=0.1)
-    ap.add_argument("--max-source-fraction", type=float, default=0.5)
-    ap.add_argument("--seed", type=int, default=42)
-    args = ap.parse_args()
+def current_git_commit(project_root: Path) -> str | None:
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=project_root,
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=True,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return result.stdout.strip() or None
 
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-    print("Loading sources (dedup by source_sequence_id):")
-    all_rows = []
-    for cfg in SOURCE_CONFIGS:
-        rows = load_source(cfg)
-        # Subsample to target if over target.
-        if len(rows) > cfg["target"]:
-            rng = random.Random(args.seed)
-            rng.shuffle(rows)
-            rows = rows[: cfg["target"]]
-            print(f"  {cfg['name']}: subsampled to {len(rows)}")
+def git_worktree_dirty(project_root: Path) -> bool | None:
+    try:
+        result = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=project_root,
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=True,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return bool(result.stdout.strip())
+
+
+def distribution(rows: list[dict[str, Any]]) -> dict[str, dict[str, float | int]]:
+    counts = Counter(row["source_dataset"] for row in rows)
+    total = len(rows)
+    return {
+        source: {"count": count, "fraction": round(count / total, 6) if total else 0.0}
+        for source, count in sorted(counts.items())
+    }
+
+
+def build(args: argparse.Namespace) -> dict[str, Path]:
+    config_path = args.config.resolve()
+    config = json.loads(config_path.read_text(encoding="utf-8"))
+    config_dir = config_path.parent
+    project_root = Path(__file__).resolve().parents[1]
+    seed = int(config.get("seed", 20260818))
+    val_ratio = args.val_ratio if args.val_ratio is not None else float(config.get("val_ratio", 0.1))
+    if not 0 <= val_ratio < 1:
+        raise ManifestBuildError("val_ratio must satisfy 0 <= val_ratio < 1")
+    dataset_base = expand_path(str(config["dataset_base_path"]), relative_to=config_dir)
+    output_dir = (
+        args.output_dir.resolve()
+        if args.output_dir
+        else project_root / "training_metadata" / "generated"
+    )
+    output_dir.mkdir(parents=True, exist_ok=True)
+    quality = {
+        "min_chars": 24,
+        "max_chars": 420,
+        "max_exact_caption_repeats": 4,
+        "reject_patterns": [r"\bvideo[_ -]?id\s*:", r"\bfile(?:name)?\s*:"],
+        **config.get("caption_quality", {}),
+    }
+
+    all_rows: list[dict[str, Any]] = []
+    source_reports: dict[str, Any] = {}
+    for source in config.get("sources", []):
+        rows, stats = load_source(
+            source,
+            phase=args.phase,
+            config_dir=config_dir,
+            dataset_base=dataset_base,
+            seed=seed,
+            quality=quality,
+            check_files=args.check_files,
+            emit_relative_paths=bool(config.get("emit_relative_paths", True)),
+        )
         all_rows.extend(rows)
+        source_reports[str(source["name"])] = stats
 
-    print(f"\nTotal before cap/split: {len(all_rows)}")
-    by_src = defaultdict(int)
-    for r in all_rows:
-        by_src[r["source_dataset"]] += 1
-    for src, n in sorted(by_src.items()):
-        pct = 100.0 * n / len(all_rows)
-        print(f"  {src}: {n} ({pct:.1f}%)")
+    if not all_rows:
+        raise ManifestBuildError(f"No usable rows were selected for phase {args.phase!r}")
+    maximum = float(config.get("max_source_fraction", 0.30))
+    enforce_source_fraction(all_rows, maximum)
+    train, val = split_by_sequence(all_rows, val_ratio=val_ratio, seed=seed)
+    if not train:
+        raise ManifestBuildError("Training split is empty")
+    enforce_source_fraction(train, maximum)
 
-    # Cap single source at max_fraction.
-    print(f"\nCapping single source at {args.max_source_fraction*100:.0f}%:")
-    all_rows = cap_single_source(all_rows, args.max_source_fraction, args.seed)
+    train_sequences = {row["source_sequence_id"] for row in train}
+    val_sequences = {row["source_sequence_id"] for row in val}
+    leakage = sorted(train_sequences & val_sequences)
+    if leakage:
+        raise ManifestBuildError(f"Sequence leakage detected: {leakage[:5]}")
 
-    # Split by source_sequence_id.
-    print(f"\nSplitting train/val (val_ratio={args.val_ratio}, by source_sequence_id):")
-    train, val = split_by_sequence(all_rows, args.val_ratio, args.seed)
-    print(f"  train: {len(train)}  val: {len(val)}")
+    prefix = f"unified_{args.phase}"
+    outputs = {
+        "train_jsonl": output_dir / f"{prefix}_train.jsonl",
+        "val_jsonl": output_dir / f"{prefix}_val.jsonl",
+        "train_csv": output_dir / f"{prefix}_train.csv",
+        "val_csv": output_dir / f"{prefix}_val.csv",
+        "report": output_dir / f"{prefix}_report.json",
+    }
+    write_jsonl(train, outputs["train_jsonl"])
+    write_jsonl(val, outputs["val_jsonl"])
+    write_diffsynth_csv(train, outputs["train_csv"])
+    write_diffsynth_csv(val, outputs["val_csv"])
 
-    # Write outputs.
-    write_jsonl(train, OUTPUT_DIR / "unified_train.jsonl")
-    write_jsonl(val, OUTPUT_DIR / "unified_val.jsonl")
-    write_csv(train, OUTPUT_DIR / "unified_train.csv")
-    write_csv(val, OUTPUT_DIR / "unified_val.csv")
+    report = {
+        "schema_version": 1,
+        "phase": args.phase,
+        "created_at_utc": datetime.now(timezone.utc).isoformat(),
+        "seed": seed,
+        "val_ratio": val_ratio,
+        "dataset_base_path": str(dataset_base),
+        "config_path": str(config_path),
+        "config_sha256": sha256_file(config_path),
+        "project_git_commit": current_git_commit(project_root),
+        "project_git_dirty": git_worktree_dirty(project_root),
+        "check_files": args.check_files,
+        "total_selected": len(all_rows),
+        "train_count": len(train),
+        "val_count": len(val),
+        "sequence_leakage_count": len(leakage),
+        "source_distribution_all": distribution(all_rows),
+        "source_distribution_train": distribution(train),
+        "source_distribution_val": distribution(val),
+        "sources": source_reports,
+        "outputs": {
+            key: {"path": str(path), "sha256": sha256_file(path)}
+            for key, path in outputs.items()
+            if key != "report"
+        },
+    }
+    outputs["report"].write_text(
+        json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    return outputs
 
-    print(f"\nWrote:")
-    print(f"  {OUTPUT_DIR/'unified_train.jsonl'} ({len(train)} rows)")
-    print(f"  {OUTPUT_DIR/'unified_val.jsonl'} ({len(val)} rows)")
-    print(f"  {OUTPUT_DIR/'unified_train.csv'}")
-    print(f"  {OUTPUT_DIR/'unified_val.csv'}")
 
-    # Final source distribution.
-    print("\nFinal train distribution:")
-    by_src = defaultdict(int)
-    for r in train:
-        by_src[r["source_dataset"]] += 1
-    for src, n in sorted(by_src.items()):
-        pct = 100.0 * n / len(train)
-        print(f"  {src}: {n} ({pct:.1f}%)")
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--config", type=Path, required=True, help="JSON source specification")
+    parser.add_argument("--phase", choices=("smoke", "pilot", "scale"), default="smoke")
+    parser.add_argument("--output-dir", type=Path, help="Output directory")
+    parser.add_argument("--val-ratio", type=float, help="Override config validation ratio")
+    parser.add_argument(
+        "--check-files",
+        action="store_true",
+        help="Require every selected input video to exist before freezing outputs",
+    )
+    return parser.parse_args(argv)
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = parse_args(argv)
+    try:
+        outputs = build(args)
+    except (ManifestBuildError, KeyError, ValueError, json.JSONDecodeError) as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
+    print(f"Frozen phase: {args.phase}")
+    for name, path in outputs.items():
+        print(f"  {name}: {path}")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
